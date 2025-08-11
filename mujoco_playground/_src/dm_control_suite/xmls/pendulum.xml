@@ -3,7 +3,8 @@
   <include file="./common/skybox.xml"/>
   <include file="./common/materials.xml"/>
 
-  <option timestep="0.01" iterations="4" ls_iterations="8">
+  <!-- 🎯 调整仿真参数匹配实际控制频率 -->
+  <option timestep="0.005" iterations="4" ls_iterations="8">
     <flag contact="disable" eulerdamp="disable"/>
   </option>
 
@@ -12,15 +13,40 @@
     <geom name="floor" size="2 2 .2" type="plane" material="grid"/>
     <camera name="fixed" pos="0 -1.5 2" xyaxes='1 0 0 0 1 1'/>
     <camera name="lookat" mode="targetbodycom" target="pole" pos="0 -2 1"/>
-    <body name="pole" pos="0 0 .6">
-      <joint name="hinge" type="hinge" axis="0 1 0" damping="0.1"/>
-      <geom name="base" material="decoration" type="cylinder" fromto="0 -.03 0 0 .03 0" size="0.021" mass="0"/>
-      <geom name="pole" material="self" type="capsule" fromto="0 0 0 0 0 0.5" size="0.02" mass="0"/>
-      <geom name="mass" material="effector" type="sphere" pos="0 0 0.5" size="0.05" mass="1"/>
+    <body name="pole" pos="0 0 .4">
+      <joint name="hinge" type="hinge" axis="0 1 0" 
+             damping="0.08" frictionloss="0.008"/>
+      
+      <!-- 电机轴 -->
+      <geom name="base" material="decoration" type="cylinder" 
+            fromto="0 -.03 0 0 .03 0" size="0.021" mass="0.05"/>
+      
+      <!-- 🎯 连杆：长度0.2m，质量0.2kg -->
+      <geom name="pole" material="self" type="capsule" 
+            fromto="0 0 0 0 0 -0.2" size="0.015" mass="0.2"/>
+      
+      <!-- 🎯 末端负载：1kg -->
+      <geom name="mass" material="effector" type="sphere" 
+            pos="0 0 -0.2" size="0.03" mass="1.0"/>
     </body>
   </worldbody>
 
   <actuator>
-    <motor name="torque" joint="hinge" gear="1" ctrlrange="-1 1" ctrllimited="true"/>
+    <motor name="torque" joint="hinge" gear="1" 
+           ctrlrange="-1.2 1.2" ctrllimited="true"
+           forcerange="-1.2 1.2" forcelimited="true"/>
   </actuator>
+
+  <!-- 🎯 完整的传感器系统模拟CAN通信 -->
+  <sensor>
+    <!-- 关节位置传感器 (编码器) -->
+    <jointpos name="motor_position" joint="hinge"/>
+    
+    <!-- 关节速度传感器 -->
+    <jointvel name="motor_velocity" joint="hinge"/>
+    
+    <!-- 力矩传感器 -->
+    <actuatorfrc name="motor_torque" actuator="torque"/>
+  </sensor>
+
 </mujoco>
