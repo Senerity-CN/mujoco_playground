@@ -228,215 +228,154 @@ class SwingUp(mjx_env.MjxEnv):
     ])
 
   def _get_reward(
-      self,
-      data: mjx.Data,
-      action: jax.Array,
-      info: dict[str, Any],
-      metrics: dict[str, Any],
-  ) -> jax.Array:
-        del metrics  # Unused.
-        
-        # 🎯 使用传感器数据计算的状态 - 与step函数保持一致
-        if 'sensor_cos_theta' in info:
-            # 使用step函数中计算的传感器状态
-            cos_theta = info['sensor_cos_theta']
-            sin_theta = info['sensor_sin_theta']
-            angular_vel = info['sensor_angular_vel']
-        else:
-            # 回退到传感器数据计算（用于reset等情况）
-            motor_position = data.sensordata[self._sensor_ids['motor_position']]
-            motor_velocity = data.sensordata[self._sensor_ids['motor_velocity']]
-            
-            # 使用统一的传感器噪声生成
-            position_noise, velocity_noise, _ = self._get_sensor_noise(info)
-            
-            noisy_position = motor_position + position_noise
-            noisy_velocity = motor_velocity + velocity_noise
-            
-            cos_theta = jp.cos(noisy_position)
-            sin_theta = jp.sin(noisy_position)
-            angular_vel = noisy_velocity
-        
-        # 🎯 重新设计阶段划分 - 避免中间区域陷阱
-        is_very_bottom = cos_theta > 0.8        # 真正底部区域（约37度范围内）
-        is_bottom_half = cos_theta > -0.5       # 下半区域
-        is_middle = (cos_theta <= -0.5) & (cos_theta > -0.85)  # 中间过渡区
-        is_near_top = (cos_theta <= -0.85) & (cos_theta > -0.95)  # 接近顶部
-        is_very_top = cos_theta <= -0.95        # 顶部区域  
-      
-        # 🎯 底部能量积累奖励 - 大幅增强，鼓励高能量摆动
-        energy_reward = jp.where(
-            is_very_bottom,
-            # 只有在真正底部且高速度时才给奖励
+    self,
+    data: mjx.Data,
+    action: jax.Array,
+    info: dict[str, Any],
+    metrics: dict[str, Any],
+) -> jax.Array:
+    del metrics  # Unused.
+    
+    # 🎯 获取传感器状态（保持原有逻辑）
+    if 'sensor_cos_theta' in info:
+        cos_theta = info['sensor_cos_theta']
+        sin_theta = info['sensor_sin_theta']
+        angular_vel = info['sensor_angular_vel']
+    else:
+        # 回退逻辑...
+        motor_position = data.sensordata[self._sensor_ids['motor_position']]
+        motor_velocity = data.sensordata[self._sensor_ids['motor_velocity']]
+        position_noise, velocity_noise, _ = self._get_sensor_noise(info)
+        noisy_position = motor_position + position_noise
+        noisy_velocity = motor_velocity + velocity_noise
+        cos_theta = jp.cos(noisy_position)
+        sin_theta = jp.sin(noisy_position)
+        angular_vel = noisy_velocity
+    
+    # 🎯 区域定义（保持原有）
+    is_very_bottom = cos_theta > 0.95      
+    is_bottom = cos_theta > 0.7            
+    is_lower_quarter = cos_theta > 0.0     
+    is_upper_quarter = cos_theta > -0.7    
+    is_high = cos_theta > -0.9             
+    is_very_high = cos_theta > -0.98       
+    is_top = cos_theta <= -0.98            
+    
+    # 🎯 1. 高度奖励 - 归一化到 [0, 1]
+    raw_height_reward = jp.where(
+        cos_theta <= -0.9,                  
+        100.0 * (-cos_theta - 0.9) ** 2,   
+        jp.where(
+            cos_theta <= -0.7,              
+            50.0 * (-cos_theta - 0.7),     
             jp.where(
-                jp.abs(angular_vel) > 1.0,
-                jp.minimum(angular_vel**2 / 3.0, 12.0),  # 高速度大奖励
-                -5.0 * (1.0 - jp.abs(angular_vel))       # 低速度负奖励，强迫摆动
-            ),
-            jp.where(
-                is_bottom_half & ~is_very_bottom,
-                # 其他底部区域：奖励向上运动的能量
+                cos_theta <= 0.0,           
+                20.0 * (-cos_theta),       
                 jp.where(
-                    jp.abs(angular_vel) > 0.5,
-                    angular_vel**2 / 5.0 * (1.0 - cos_theta),  # 速度×高度奖励
-                    0.0
-                ),
-                0.0
+                    cos_theta <= 0.7,       
+                    10.0 * (0.7 - cos_theta),  
+                    0.0                     
+                )
             )
         )
-        
-        # 🎯 向上突破奖励 - 大幅奖励从中间区域向顶部的移动
-        upward_momentum_reward = jp.where(
-            is_middle,
-            # 在中间区域奖励继续向上的动量
+    )
+    height_reward = jp.tanh(raw_height_reward / 50.0)  # 🎯 归一化到 [-1, 1]
+    
+    # 🎯 2. 底部摆动惩罚 - 归一化
+    raw_small_swing_penalty = jp.where(
+        is_bottom & (jp.abs(angular_vel) < 2.0),  
+        -30.0 * (2.0 - jp.abs(angular_vel)),      
+        0.0
+    )
+    small_swing_penalty = jp.tanh(raw_small_swing_penalty / 20.0)  # 🎯 归一化
+    
+    # 🎯 3. 底部静止惩罚 - 归一化
+    raw_bottom_stillness_penalty = jp.where(
+        is_very_bottom & (jp.abs(angular_vel) < 0.3),
+        -100.0,  
+        0.0
+    )
+    bottom_stillness_penalty = jp.tanh(raw_bottom_stillness_penalty / 50.0)  # 🎯 归一化
+    
+    # 🎯 4. 动量奖励 - 归一化
+    raw_momentum_reward = jp.where(
+        jp.abs(angular_vel) > 1.0,
+        jp.minimum(angular_vel ** 2 / 2.0, 30.0),  
+        0.0
+    )
+    momentum_reward = jp.tanh(raw_momentum_reward / 15.0)  # 🎯 归一化
+    
+    # 🎯 5. 突破奖励 - 归一化（重要！）
+    raw_breakthrough_reward = jp.where(
+        cos_theta <= -0.5,                    
+        jp.where(
+            cos_theta <= -0.8,                
             jp.where(
-                jp.abs(angular_vel) > 1.0,  # 有足够速度
-                (-cos_theta - 0.5) * 20.0 + jp.minimum(angular_vel**2 / 2.0, 15.0),  # 高度+速度奖励
-                -3.0  # 速度不足时惩罚
+                cos_theta <= -0.95,           
+                200.0,                        
+                100.0                         
             ),
-            0.0
-        )
-        
-        # 🎯 接近顶部奖励 - 渐进式增强
-        approaching_top_reward = jp.where(
-            is_near_top,
-            (-cos_theta - 0.85) * 100.0 + 15.0,  # 大幅增强接近顶部的奖励
-            0.0
-        )
-        
-        # 🎯 顶部稳定奖励
-        upright_reward = jp.where(
-            is_very_top,
-            reward.tolerance(cos_theta, (-1.0, -0.98)) * 50.0,  # 修正为负值范围
-            0.0
-        )
-        
-        # 🎯 速度稳定奖励 - 仅在顶部
-        stability_reward = jp.where(
-            is_very_top,
-            jp.exp(-angular_vel**2 / 0.3) * 20.0,
-            0.0
-        )
-        
-        # 🎯 静止奖励 - 超高奖励
-        stillness_reward = jp.where(
-            is_very_top & (jp.abs(angular_vel) < 0.05),
-            100.0,  # 超高静止奖励
-            0.0
-        )
-        
-        # 🎯 中间区域陷阱惩罚 - 防止智能体满足于中间摆动
-        middle_trap_penalty = jp.where(
-            is_middle & (jp.abs(angular_vel) < 1.5),  # 在中间区域但速度不足
-            -6.0,  # 惩罚低速度的中间摆动
-            0.0
-        )
-        
-        # 🎯 能量损失惩罚 - 如果摆杆从高位置下降
-        energy_loss_penalty = jp.where(
-            (cos_theta > 0.5) & (angular_vel * jp.sign(cos_theta - 0.5) < 0),  # 从高位置向底部运动
-            -5.0 * jp.abs(angular_vel),  # 增强惩罚
-            0.0
-        )
-        
-        # 🎯 扭矩效率 - 简化
-        torque_magnitude = jp.abs(action[0])
-        efficiency_reward = jp.where(
-            is_very_top & (torque_magnitude < 0.2),
-            2.0,
-            0.0
-        )
-        
-        # 🎯 传感器噪声适应奖励 - 奖励在噪声环境下的稳定性
-        sensor_stability_reward = jp.where(
-            is_very_top,
-            # 基于角度和角速度的联合稳定性
-            jp.exp(-(sin_theta**2 + angular_vel**2) / 0.1) * 5.0,
-            0.0
-        )
-
-        # 🎯 大幅加强扭矩惩罚 - 在顶部严厉惩罚大扭矩
-        torque_magnitude = jp.abs(action[0])
-        
-        # 顶部扭矩惩罚 - 非线性惩罚
-        top_torque_penalty = jp.where(
-            is_very_top,
-            # 在顶部使用大扭矩会被严厉惩罚
-            -jp.where(
-                torque_magnitude > 0.2,
-                (torque_magnitude - 0.2) * 200.0,  # 超过0.2的部分大幅惩罚
-                0.0
-            ),
-            jp.where(
-                is_near_top,
-                # 接近顶部时也要惩罚大扭矩
-                -jp.where(
-                    torque_magnitude > 0.5,
-                    (torque_magnitude - 0.5) * 50.0,
-                    0.0
-                ),
-                0.0
-            )
-        )
-        
-        # 🎯 扭矩平滑奖励 - 鼓励连续的小调整
-        if 'last_actual_torque' in info:
-            last_torque = info['last_actual_torque']
-            torque_change = jp.abs(action[0] - last_torque)
-            
-            smoothness_reward = jp.where(
-                is_very_top | is_near_top,
-                # 在顶部区域奖励平滑的扭矩变化
-                jp.exp(-torque_change * 5.0) * 3.0,  # 越平滑奖励越高
-                0.0
-            )
-        else:
-            smoothness_reward = 0.0
-        
-        # 🎯 精确控制奖励 - 大幅提升
-        precision_control_reward = jp.where(
-            is_very_top & (torque_magnitude < 0.1),
-            20.0,  # 使用极小扭矩时给予高奖励
-            0.0
-        )
-        
-         # 🎯 归一化各奖励项到[-1, 1]
-        normalized_rewards = {
-            'energy': jp.tanh(energy_reward / 10.0),                    # /10归一化
-            'upward': jp.tanh(upward_momentum_reward / 20.0),          # /20归一化
-            'approaching': jp.tanh(approaching_top_reward / 50.0),      # /50归一化，压制主导性
-            'upright': jp.tanh(upright_reward / 30.0),                 # /30归一化
-            'stability': jp.tanh(stability_reward / 15.0),             # /15归一化
-            'stillness': jp.tanh(stillness_reward / 80.0),             # /80归一化，压制主导性
-            'middle_trap': jp.tanh(middle_trap_penalty / 5.0),         # 惩罚也归一化
-            'energy_loss': jp.tanh(energy_loss_penalty / 10.0),
-            'efficiency': jp.tanh(efficiency_reward / 3.0),
-            'sensor_stability': jp.tanh(sensor_stability_reward / 5.0),
-        }
-        
-        # 🎯 现在权重调整变得直观（都是[-1,1]范围）
-        total_reward = (
-            normalized_rewards['energy'] * 1.0 +           # 底部能量
-            normalized_rewards['upward'] * 1.0 +           # 向上突破  
-            normalized_rewards['approaching'] * 1.0 +      # 接近顶部
-            normalized_rewards['upright'] * 1.0 +          # 顶部稳定
-            normalized_rewards['stability'] * 3.0 +        # 速度稳定（你之前的调整）
-            normalized_rewards['stillness'] * 5.0 +        # 静止奖励（你之前的调整）
-            normalized_rewards['middle_trap'] * 1.0 +      # 中间陷阱
-            normalized_rewards['energy_loss'] * 1.0 +      # 能量损失
-            normalized_rewards['efficiency'] * 1.0 +       # 扭矩效率
-            normalized_rewards['sensor_stability'] * 1.0   # 传感器稳定
-        )
-        
-        # 你的扭矩惩罚也归一化
-        torque_magnitude = jp.abs(action[0])
-        simple_torque_penalty = jp.where(
-            is_very_top & (torque_magnitude > 0.3),
-            -0.3,  # 归一化后的惩罚
-            0.0
-        )
-        
-        return total_reward + simple_torque_penalty
+            50.0                              
+        ),
+        0.0
+    )
+    breakthrough_reward = jp.tanh(raw_breakthrough_reward / 100.0)  # 🎯 归一化
+    
+    # 🎯 6. 向上方向奖励 - 归一化
+    theta = jp.arctan2(sin_theta, cos_theta)
+    is_swinging_up = jp.where(
+        theta > 0, angular_vel < 0, angular_vel > 0
+    )
+    raw_upward_direction_reward = jp.where(
+        is_swinging_up & (jp.abs(angular_vel) > 0.5),
+        15.0 * jp.abs(angular_vel) * (1.0 - cos_theta),  
+        0.0
+    )
+    upward_direction_reward = jp.tanh(raw_upward_direction_reward / 25.0)  # 🎯 归一化
+    
+    # 🎯 7. 顶部稳定奖励 - 归一化
+    raw_top_stability_reward = jp.where(
+        is_top,
+        jp.where(
+            jp.abs(angular_vel) < 0.1,
+            150.0,  
+            50.0    
+        ),
+        0.0
+    )
+    top_stability_reward = jp.tanh(raw_top_stability_reward / 75.0)  # 🎯 归一化
+    
+    # 🎯 8. 扭矩效率 - 归一化
+    torque_magnitude = jp.abs(action[0])
+    raw_torque_efficiency = jp.where(
+        is_top & (torque_magnitude < 0.2),
+        10.0,
+        0.0
+    )
+    torque_efficiency = jp.tanh(raw_torque_efficiency / 8.0)  # 🎯 归一化
+    
+    # 🎯 9. 掉落惩罚 - 归一化
+    raw_falling_penalty = jp.where(
+        (cos_theta > -0.5) & ~is_swinging_up & (jp.abs(angular_vel) > 2.0),
+        -20.0,
+        0.0
+    )
+    falling_penalty = jp.tanh(raw_falling_penalty / 15.0)  # 🎯 归一化
+    
+    # 🎯 现在所有奖励项都在 [-1, 1] 范围内，权重设计变得直观
+    total_reward = (
+        height_reward * 0.8 +                    # 🎯 基础高度进展
+        breakthrough_reward * 2.5 +              # 🎯 最高权重：突破性进展
+        upward_direction_reward * 1.8 +          # 🎯 高权重：正确方向
+        momentum_reward * 1.2 +                  # 🎯 适中：动量积累
+        top_stability_reward * 3.5 +             # 🎯 超高权重：顶部稳定
+        torque_efficiency * 1.5 +                # 🎯 适中：精细控制
+        small_swing_penalty * 2.0 +              # 🎯 中等权重：避免小摆动
+        bottom_stillness_penalty * 2.5 +         # 🎯 高权重：避免静止
+        falling_penalty * 1.0                    # 🎯 基础：避免掉落
+    )
+    
+    return total_reward
   
   def _pole_vertical(self, data: mjx.Data) -> jax.Array:
     """Returns vertical (z) component of pole frame."""

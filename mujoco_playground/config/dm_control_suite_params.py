@@ -55,13 +55,14 @@ def brax_ppo_config(
     rl_config.discounting = 0.95
   elif env_name == "PendulumSwingup":
     rl_config.action_repeat = 1               
-    rl_config.num_updates_per_batch = 8       # 🎯 降低更新频率，给更多探索时间
-    rl_config.learning_rate = 2e-4            # 🎯 降低学习率，避免过快收敛到局部最优
-    rl_config.entropy_cost = 8e-3             # 🎯 增加探索性
-    rl_config.num_timesteps = 300_000_000     # 🎯 给更多训练时间
-    rl_config.discounting = 0.998             # 🎯 提高折扣因子，重视长期奖励
-    rl_config.unroll_length = 40              # 🎯 增加展开长度，更好地学习长期策略
-    rl_config.reward_scaling = 0.5            # 🎯 降低奖励缩放，避免梯度爆炸
+    rl_config.num_updates_per_batch = 6       # 🎯 稳定的更新频率
+    rl_config.learning_rate = 1e-4            # 🎯 适中的学习率
+    rl_config.entropy_cost = 2e-2             # 🎯 保持探索性
+    rl_config.num_timesteps = 500_000_000     
+    rl_config.discounting = 0.998             # 🎯 重视长期奖励
+    rl_config.unroll_length = 40              
+    rl_config.reward_scaling = 1.0            # 🎯 不需要额外缩放了
+    rl_config.clipping_epsilon = 0.15 
 
   return rl_config
 
