@@ -172,33 +172,25 @@ class InteractivePendulumDemo:
             angle = 0.0
             angular_vel = 0.0
         
-        # 规范化角度到 [0, 2π]
-        angle_normalized = angle % (2 * np.pi)
-        angle_deg = np.degrees(angle_normalized)
+        angle_deg = np.degrees(abs(angle))
         
-        # 计算相对于倒立位置(π)的偏差
-        upright_error = abs(angle_normalized - np.pi)
-        if upright_error > np.pi:
-            upright_error = 2 * np.pi - upright_error
-        upright_error_deg = np.degrees(upright_error)
-        
-        # 计算相对于底部位置(0 或 2π)的偏差
-        bottom_error = min(angle_normalized, 2 * np.pi - angle_normalized)
-        bottom_error_deg = np.degrees(bottom_error)
+        # 确保角度在0-180度范围内
+        if angle_deg > 180:
+            angle_deg = 360 - angle_deg
         
         # 判断摆杆状态
-        if upright_error_deg < 10 and abs(angular_vel) < 0.5:
+        if angle_deg > 170 and abs(angular_vel) < 0.5:
             status = "🎯 倒立稳定"
-        elif upright_error_deg < 30:
+        elif angle_deg > 150:
             status = "⚡ 接近稳定"
-        elif bottom_error_deg < 30:
+        elif angle_deg < 30:
             status = "🌊 底部摆动"
         elif abs(angular_vel) > 5:
             status = "🌪️ 快速摆动"
         else:
             status = "⚡ 上升中"
         
-        return upright_error_deg, angular_vel, status
+        return angle_deg, angular_vel, status
     
     def _keyboard_callback(self, keycode):
         """键盘回调函数"""
