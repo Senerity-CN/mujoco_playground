@@ -5,3 +5,8 @@ __pycache__
 MUJOCO_LOG.TXT
 mujoco_menagerie
 checkpoints/
+
+.vscode/
+*.mp4
+setup_gpu_env.sh
+**/.ipynb_checkpoints/
