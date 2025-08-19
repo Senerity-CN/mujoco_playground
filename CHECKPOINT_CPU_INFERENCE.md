@@ -102,5 +102,3 @@ If you encounter device placement errors:
 
 - `interactive_pendulum_demo_gpu.py`: Original GPU-capable version
 - `interactive_pendulum_demo_cpu.py`: CPU-only version with explicit device management
-- `load_checkpoint_cpu.py`: Example code for loading checkpoints on CPU
-- `sim_to_sim_demo.py`: Another example of CPU inference from GPU-trained models
