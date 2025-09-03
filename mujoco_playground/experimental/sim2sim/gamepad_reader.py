@@ -61,6 +61,7 @@ class Gamepad:
   def _connect_device(self):
     try:
       self._device = hid.device()
+      print(f"Connecting to {self._vendor_id} {self._product_id}")
       self._device.open(self._vendor_id, self._product_id)
       self._device.set_nonblocking(True)
       print(
@@ -69,7 +70,7 @@ class Gamepad:
           f"{self._device.get_product_string()}"
       )
       return True
-    except (hid.HIDException, OSError) as e:
+    except OSError as e:
       print(f"Error connecting to device: {e}")
       return False
 
